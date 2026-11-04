@@ -85,3 +85,23 @@ pub fn vocab_builder(merges: &[((u32, u32), u32)]) -> Vec<Vec<u8>> {
 
     vocab
 }
+
+// Convert the entire sequence of bytes at once 
+pub fn decode_bytes(ids: &[u32], vocab: &[Vec<u8>]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+
+    for &id in ids {
+        bytes.extend_from_slice(&vocab[id as usize]);
+    }
+
+    bytes
+}
+
+
+pub fn decode(ids: &[u32], vocab: &[Vec<u8>]) -> String {
+    let bytes = decode_bytes(ids, vocab);
+
+    let text = String::from_utf8_lossy(&bytes).to_string();
+
+    text
+}

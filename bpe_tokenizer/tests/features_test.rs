@@ -32,3 +32,21 @@ fn step3_vocab_builder() {
     // no merges → just the 256 bytes
     assert_eq!(vocab_builder(&[]).len(), 256);
 }
+
+#[test]
+fn step4_deoce() {
+    let vocab = vocab_builder(&train("aaabdaaabac", 257));
+    assert_eq!(decode(&[256, 98], &vocab), "aab");
+
+    assert_eq!(decode(&[0xE2], &vocab), "\u{FFFD}");
+
+    // raw byte ids are decoded back to the exact original text
+    let text = "héllo €";
+    assert_eq!(decode(&text_to_bytes_converter(text), &vocab), text);
+
+    // vocab[256] here is [97, 195] = "a" + half of "é"
+    let v = vocab_builder(&train("aéaé", 257));
+    assert_eq!(decode(&[256, 169, 256, 169], &v), "aéaé");
+
+    assert_eq!(decode(&[], &vocab), "");
+}
