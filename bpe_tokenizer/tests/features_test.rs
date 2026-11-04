@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use bpe_tokenizer::features::*;
 
 #[test]
@@ -34,7 +36,7 @@ fn step3_vocab_builder() {
 }
 
 #[test]
-fn step4_deoce() {
+fn step4_decode() {
     let vocab = vocab_builder(&train("aaabdaaabac", 257));
     assert_eq!(decode(&[256, 98], &vocab), "aab");
 
@@ -49,4 +51,30 @@ fn step4_deoce() {
     assert_eq!(decode(&[256, 169, 256, 169], &v), "aéaé");
 
     assert_eq!(decode(&[], &vocab), "");
+}
+
+#[test]
+
+fn step5_encode() {
+    let merges = train("aaabdaaabac", 257);
+    let map: HashMap<(u32, u32), u32> = merges.iter().cloned().collect();
+    assert_eq!(
+        encode("aaabdaaabac", &map),
+        vec![256, 97, 98, 100, 256, 97, 98, 97, 99]
+    );
+
+    let vocab = vocab_builder(&merges);
+
+    for s in ["", "a", "aaaa", "안녕하세요 👋 hello world 🤗"] {
+        assert_eq!(decode(&encode(s, &map), &vocab), s);
+    }
+
+    // Testing which one wins between the smallest id "aa" (256) wins over "ab" (257). The smallest normally wins
+    let merges3 = train("aaabdaaabac", 259);
+    let map3: HashMap<(u32, u32), u32> = merges3.iter().copied().collect();
+    assert_eq!(encode("aab", &map3), vec![256, 98]);
+
+    assert_eq!(encode("aaab", &map3), vec![258]);
+    // encoding the training text reproduces training's final ids
+    assert_eq!(encode("aaabdaaabac", &map3), vec![258, 100, 258, 97, 99]);
 }

@@ -86,7 +86,7 @@ pub fn vocab_builder(merges: &[((u32, u32), u32)]) -> Vec<Vec<u8>> {
     vocab
 }
 
-// Convert the entire sequence of bytes at once 
+// Convert the entire sequence of bytes at once
 pub fn decode_bytes(ids: &[u32], vocab: &[Vec<u8>]) -> Vec<u8> {
     let mut bytes = Vec::new();
 
@@ -97,11 +97,33 @@ pub fn decode_bytes(ids: &[u32], vocab: &[Vec<u8>]) -> Vec<u8> {
     bytes
 }
 
-
 pub fn decode(ids: &[u32], vocab: &[Vec<u8>]) -> String {
     let bytes = decode_bytes(ids, vocab);
 
     let text = String::from_utf8_lossy(&bytes).to_string();
 
     text
+}
+
+pub fn encode(text: &str, merges: &HashMap<(u32, u32), u32>) -> Vec<u32> {
+    let mut token_bytes = text_to_bytes_converter(text);
+
+    while token_bytes.len() > 1 {
+        let best_pair = token_bytes
+            .windows(2)
+            .filter_map(|token_ids| {
+                merges
+                    .get(&(token_ids[0], token_ids[1]))
+                    .map(|&found_id| ((token_ids[0], token_ids[1]), found_id))
+            })
+            .min_by_key(|&(_, found_id)| found_id);
+
+        let Some((pair, found_id)) = best_pair else {
+            break;
+        };
+
+        token_bytes = merge_pair(&token_bytes, pair, found_id);
+    }
+
+    token_bytes
 }
