@@ -67,3 +67,21 @@ pub fn train(text: &str, vocab_size: u32) -> Vec<((u32, u32), u32)> {
 
     merges
 }
+
+pub fn vocab_builder(merges: &[((u32, u32), u32)]) -> Vec<Vec<u8>> {
+    let mut vocab = Vec::with_capacity(256 + merges.len());
+
+    for i in 0..256 {
+        vocab.push(vec![i as u8]);
+    }
+
+    for &((first_token_id, second_token_id), new_token_id) in merges {
+        let mut bytes = vocab[first_token_id as usize].clone();
+        bytes.extend_from_slice(&vocab[second_token_id as usize]);
+
+        debug_assert_eq!(new_token_id as usize, vocab.len());
+        vocab.push(bytes);
+    }
+
+    vocab
+}
