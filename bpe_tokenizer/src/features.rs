@@ -100,9 +100,7 @@ pub fn decode_bytes(ids: &[u32], vocab: &[Vec<u8>]) -> Vec<u8> {
 pub fn decode(ids: &[u32], vocab: &[Vec<u8>]) -> String {
     let bytes = decode_bytes(ids, vocab);
 
-    let text = String::from_utf8_lossy(&bytes).to_string();
-
-    text
+    String::from_utf8_lossy(&bytes).to_string()
 }
 
 pub fn encode(text: &str, merges: &HashMap<(u32, u32), u32>) -> Vec<u32> {
