@@ -1,5 +1,4 @@
-use bpe_tokenizer::features::{train, vocab_builder};
-use bpe_tokenizer::{GPT4_PATTERN, Tokenizer, TokenizerError};
+use bpe_tokenizer::{GPT4_PATTERN, Tokenizer};
 
 const SAMPLE: &str = "the cat sat on the mat. the dog sat on the log. \
 don't stop: 1234567 cats & 89 dogs!\n    indented line\n";
@@ -36,4 +35,42 @@ fn step6_no_merges_just_bytes() {
     assert!(tokenizer.merges().is_empty());
     assert_eq!(tokenizer.token_bytes(255), Some(&[255u8][..]));
     assert_eq!(tokenizer.token_bytes(256), None);
+}
+
+#[test]
+fn step7_split() {
+    let tokenizer = Tokenizer::from_merges(GPT4_PATTERN, vec![]).unwrap();
+
+    assert_eq!(
+        tokenizer.split("Hello world!! 123456 don't").unwrap(),
+        vec!["Hello", " world", "!!", " ", "123", "456", " don", "'t"]
+    );
+
+    assert_eq!(
+        tokenizer.split("    return 1").unwrap(),
+        vec!["   ", " return", " ", "1"]
+    );
+}
+
+#[test]
+fn step8_train_on_chunks() {
+    let tokenizer = Tokenizer::train(SAMPLE, 300, GPT4_PATTERN).unwrap();
+    assert!(tokenizer.vocab_size() <= 300);
+
+    for id in 256..tokenizer.vocab_size() as u32 {
+        let bytes = tokenizer.token_bytes(id).unwrap();
+
+        assert!(
+            !bytes.windows(2).any(|w| w[0] != b' ' && w[1] == b' '),
+            "{:?}",
+            String::from_utf8_lossy(bytes)
+        )
+    }
+}
+
+#[test]
+fn test_training_updates_chunk_sequences() {
+    let tokenizer = Tokenizer::train("abc abc", 258, GPT4_PATTERN).unwrap();
+
+    assert_eq!(tokenizer.merges(), &[(97, 98), (256, 99)]);
 }

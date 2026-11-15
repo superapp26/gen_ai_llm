@@ -1,8 +1,11 @@
 pub mod features;
 
 use fancy_regex::Regex;
-use features::{merge_pair, text_to_bytes_converter};
-use std::{collections::HashMap, hash::Hash};
+use features::merge_pair;
+use std::cmp::Reverse;
+use std::collections::HashMap;
+
+use crate::features::text_to_bytes_converter;
 
 pub const GPT4_PATTERN: &str = r"'(?i:[sdmt]|ll|ve|re)|[^\r\n\p{L}\p{N}]?+\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]++[\r\n]*|\s*[\r\n]|\s+(?!\S)|\s+";
 pub const MIN_PAIR_COUNT: usize = 2;
@@ -114,5 +117,84 @@ impl Tokenizer {
 
     pub fn special_token_id(&self, token: &str) -> Option<u32> {
         self.special.get(token).copied()
+    }
+
+    pub fn split<'a>(&self, text: &'a str) -> Result<Vec<&'a str>, TokenizerError> {
+        let mut chunks: Vec<&str> = Vec::new();
+
+        for m in self.regex.find_iter(text) {
+            chunks.push(m?.as_str());
+        }
+
+        Ok(chunks)
+    }
+
+    pub fn train(text: &str, vocab_size: u32, pattern: &str) -> Result<Self, TokenizerError> {
+        if vocab_size < INIT_VOCAB_SIZE {
+            return Err(TokenizerError::VocabTooSmall(
+                "Vocab can not be less than 256".to_string(),
+            ));
+        }
+
+        let mut regex_chunks: HashMap<&str, usize> = HashMap::new();
+
+        let mut bytes_frequency_mapping: Vec<(Vec<u32>, usize)> = Vec::new();
+
+        let regex = Regex::new(pattern)?;
+
+        for result in regex.find_iter(text) {
+            let chunk = result?.as_str();
+
+            *regex_chunks.entry(chunk).or_insert(0) += 1;
+        }
+
+        let mut learned_merges: Vec<(u32, u32)> = Vec::new();
+
+        for (chunk, frequency) in regex_chunks {
+            let ids = text_to_bytes_converter(chunk);
+            bytes_frequency_mapping.push((ids, frequency));
+        }
+
+        while INIT_VOCAB_SIZE as usize + learned_merges.len() < vocab_size as usize {
+            let mut pair_frequencies: HashMap<(u32, u32), usize> = HashMap::new();
+
+            for (ids, frequency) in bytes_frequency_mapping.iter() {
+                for w in ids.windows(2) {
+                    let pair = (w[0], w[1]);
+
+                    *pair_frequencies.entry(pair).or_insert(0) += *frequency;
+                }
+            }
+
+            let best_pair = pair_frequencies
+                .iter()
+                .max_by_key(|&(pair, count)| (*count, Reverse(*pair)))
+                .map(|(&pair, &count)| (pair, count));
+
+            match best_pair {
+                Some((selected_pair, best_count)) => {
+                    // Continue processing
+                    if best_count < MIN_PAIR_COUNT {
+                        break;
+                    }
+
+                    let new_token_id = INIT_VOCAB_SIZE + learned_merges.len() as u32;
+
+                    learned_merges.push(selected_pair);
+
+                    for (ids, _freq) in bytes_frequency_mapping.iter_mut() {
+                        let merged = merge_pair(ids, selected_pair, new_token_id);
+
+                        *ids = merged;
+                    }
+                }
+                None => {
+                    // Stop loop
+                    break;
+                }
+            }
+        }
+
+        Self::from_merges(pattern, learned_merges)
     }
 }
