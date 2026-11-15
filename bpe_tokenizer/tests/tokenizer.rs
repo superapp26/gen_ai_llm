@@ -3,6 +3,24 @@ use bpe_tokenizer::{GPT4_PATTERN, Tokenizer};
 const SAMPLE: &str = "the cat sat on the mat. the dog sat on the log. \
 don't stop: 1234567 cats & 89 dogs!\n    indented line\n";
 
+fn nasty() -> Vec<&'static str> {
+    vec![
+        "",
+        " ",
+        "  two  spaces ",
+        "tab\there",
+        "line\r\nbreak",
+        "e.g. 3.14",
+        "def f():\n    return 1",
+        "my_var_name",
+        "Ġ",
+        "<s>",
+        "café 👋 🤗",
+        "안녕하세요",
+        "\u{0}",
+    ]
+}
+
 // ---------- Step 6: Tokenizer type and errors ----------
 
 #[test]
@@ -73,4 +91,14 @@ fn test_training_updates_chunk_sequences() {
     let tokenizer = Tokenizer::train("abc abc", 258, GPT4_PATTERN).unwrap();
 
     assert_eq!(tokenizer.merges(), &[(97, 98), (256, 99)]);
+}
+
+#[test]
+fn step9_encode_roundtrip() {
+    let tok = Tokenizer::train(SAMPLE, 300, GPT4_PATTERN).unwrap();
+    for s in nasty().into_iter().chain([SAMPLE]) {
+        let ids = tok.encode_ordinary(s).unwrap();
+        assert!(ids.len() <= s.len());
+        assert_eq!(tok.decode(&ids).unwrap(), s);
+    }
 }

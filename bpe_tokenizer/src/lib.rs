@@ -197,4 +197,64 @@ impl Tokenizer {
 
         Self::from_merges(pattern, learned_merges)
     }
+
+    pub fn encode_chunk(&self, chunk: &str) -> Vec<u32> {
+        let mut chunk_ids = text_to_bytes_converter(chunk);
+
+        while chunk_ids.len() > 1 {
+            let best_pair = chunk_ids
+                .windows(2)
+                .filter_map(|window| {
+                    let pair = (window[0], window[1]);
+
+                    self.merge_map
+                        .get(&pair)
+                        .map(|&new_token_id| (pair, new_token_id))
+                })
+                .min_by_key(|&(_, new_token_id)| new_token_id);
+
+            let Some((pair, new_token_id)) = best_pair else {
+                break;
+            };
+
+            chunk_ids = merge_pair(&chunk_ids, pair, new_token_id);
+        }
+
+        chunk_ids
+    }
+
+    pub fn encode_ordinary(&self, text: &str) -> Result<Vec<u32>, TokenizerError> {
+        let chunks = self.split(text)?;
+
+        let mut token_ids: Vec<u32> = Vec::new();
+
+        for chunk in chunks {
+            let encoded_chunk = self.encode_chunk(chunk);
+
+            token_ids.extend(encoded_chunk);
+        }
+
+        Ok(token_ids)
+    }
+
+    pub fn decode_bytes(&self, token_ids: &[u32]) -> Result<Vec<u8>, TokenizerError> {
+        let mut bytes: Vec<u8> = Vec::new();
+
+        for &id in token_ids {
+            let token_bytes = self
+                .vocab
+                .get(id as usize)
+                .ok_or(TokenizerError::UnknownTokenId(id))?;
+
+            bytes.extend_from_slice(token_bytes);
+        }
+
+        Ok(bytes)
+    }
+
+    pub fn decode(&self, token_ids: &[u32]) -> Result<String, TokenizerError> {
+        let bytes = self.decode_bytes(token_ids)?;
+
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    }
 }
