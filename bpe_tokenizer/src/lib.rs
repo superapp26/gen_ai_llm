@@ -2,8 +2,10 @@ pub mod features;
 
 use fancy_regex::Regex;
 use features::merge_pair;
+use std::clone;
 use std::cmp::Reverse;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::path::Path;
 
 use crate::features::text_to_bytes_converter;
 
@@ -11,6 +13,7 @@ pub const GPT4_PATTERN: &str = r"'(?i:[sdmt]|ll|ve|re)|[^\r\n\p{L}\p{N}]?+\p{L}+
 pub const MIN_PAIR_COUNT: usize = 2;
 pub const INIT_VOCAB_SIZE: u32 = 256;
 //pub const MAX_VOCAB_SIZE: u32 = 50_000;
+const TOKENIZER_FILE_VERSION: u32 = 1;
 
 #[derive(Debug)]
 pub enum TokenizerError {
@@ -21,6 +24,8 @@ pub enum TokenizerError {
     Regex(Box<fancy_regex::Error>),
     Io(std::io::Error),
     Json(serde_json::Error),
+    UnsupportedFileVersion(u32),
+    InvalidSpecialToken {token: String, id: u32},
 }
 
 pub struct Tokenizer {
@@ -31,6 +36,14 @@ pub struct Tokenizer {
     vocab: Vec<Vec<u8>>,
     special: HashMap<String, u32>,
     special_inv: HashMap<u32, String>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct TokenizerFile {
+    version: u32,
+    pattern: String,
+    merges: Vec<(u32, u32)>,
+    special_tokens: BTreeMap<String, u32>
 }
 
 impl std::fmt::Display for TokenizerError {
@@ -47,6 +60,10 @@ impl std::fmt::Display for TokenizerError {
             TokenizerError::Regex(regex) => write!(f, "Invalid Regex: {}", regex),
             TokenizerError::Io(error) => write!(f, "IO Error: {}", error),
             TokenizerError::Json(error) => write!(f, "JSON Error: {}", error),
+            TokenizerError::UnsupportedFileVersion(version) => write!(f, "The version {} is invalid", version),
+            TokenizerError::InvalidSpecialToken { token, id } => {
+                write!(f, "Invalid special token {token:?} with ID {id:?}")
+            }
         }
     }
 }
@@ -241,12 +258,18 @@ impl Tokenizer {
         let mut bytes: Vec<u8> = Vec::new();
 
         for &id in token_ids {
-            let token_bytes = self
+
+            if let Some(special_text) = self.special_inv.get(&id) {
+                bytes.extend_from_slice(special_text.as_bytes());
+            } else {
+                 let token_bytes = self
                 .vocab
                 .get(id as usize)
                 .ok_or(TokenizerError::UnknownTokenId(id))?;
 
             bytes.extend_from_slice(token_bytes);
+            }
+            
         }
 
         Ok(bytes)
@@ -257,4 +280,154 @@ impl Tokenizer {
 
         Ok(String::from_utf8_lossy(&bytes).into_owned())
     }
+
+    pub fn register_special_tokens(&mut self, tokens: &[&str]) {
+
+        let new_id = self.vocab_size() as u32;
+
+        for &token in tokens {
+
+            if token.is_empty() || self.special.contains_key(token) {
+                continue;
+            }
+            self.special.insert(token.to_string(), new_id);
+            self.special_inv.insert(new_id, token.to_string());
+        }
+
+    }
+
+    pub fn encode(&self, text: &str, allowed: &[&str]) -> Result<Vec<u32>, TokenizerError>{
+
+        let mut remaining = text;
+
+        let mut token_ids: Vec<u32> = Vec::new();
+
+        loop {
+
+            let mut best_match: Option<(usize, &str, u32)> = None;
+            
+            for ( special_text, &special_id) in &self.special {
+
+                // We first prevent special tokens that are empty to match forever
+
+                if special_text.is_empty() {
+                    continue;
+                }
+
+                // Look for the special registered token
+                
+                if let  Some(position) = remaining.find(special_text.as_str()) {
+
+                    let should_replace = match best_match {
+
+                        None => true,
+                        
+                        Some((best_position, best_text, _)) => {
+                            position < best_position || (position == best_position && special_text.len() > best_text.len())
+                        }
+                        
+                    };
+
+                    // Retain the earliest match and also in the case of ties prefer the longer token
+
+                    if should_replace {
+
+                        best_match = Some(
+                            (
+                                position, 
+                                special_text.as_str(),
+                                special_id
+                            )
+                        )
+                    }
+
+            }
+        }
+
+        let Some((position, special_text, special_token_id)) = best_match else {
+
+            token_ids.extend(self.encode_ordinary(remaining)?);
+
+            return  Ok(token_ids);
+        };
+
+        // Rejected tokens that are not explicitly allowed
+
+        if !allowed.contains(&special_text) {
+            return  Err(
+                TokenizerError::DisallowedTokenSpecial(
+                    special_text.to_string(),
+                )
+            );
+        }
+
+        let prefix = &remaining[..position];
+
+        token_ids.extend(self.encode_ordinary(prefix)?);
+
+        token_ids.push(special_token_id);
+
+        remaining = &remaining[position + special_text.len()..];
+
+
+    }
+}
+
+  pub fn save(&self, path: impl AsRef<Path>) -> Result<(), TokenizerError> {
+
+    let file = TokenizerFile {
+        version: TOKENIZER_FILE_VERSION,
+        pattern: self.pattern.clone(),
+        merges: self.merges.clone(),
+        special_tokens: self
+                    .special
+                    .iter()
+                    .map(|(token, &id)| (token.clone(), id))
+                    .collect(),
+    };
+
+    let json = serde_json::to_vec_pretty(&file)?;
+    std::fs::write(path, json)?;
+
+    Ok(())
+
+
+  }
+
+  pub fn  load(path: impl AsRef<Path>) -> Result<Self, TokenizerError> {
+      let json = std::fs::read(path)?;
+      let file: TokenizerFile = serde_json::from_slice(&json)?;
+
+      if file.version != TOKENIZER_FILE_VERSION {
+        return Err(
+            TokenizerError::UnsupportedFileVersion(file.version)
+        )
+      }
+
+      let mut tokenizer = Self::from_merges(&file.pattern, file.merges)?;
+
+      let oridinary_vocab_len = tokenizer.vocab.len();
+
+      let special_token_count = file.special_tokens.len();
+
+      let valid_special_ids = oridinary_vocab_len..(oridinary_vocab_len + special_token_count);
+
+      for (token, id) in file.special_tokens {
+
+       if token.is_empty() 
+                || !valid_special_ids.contains(&(id as usize))
+                || tokenizer.special_inv.contains_key(&id) {
+
+                    return Err(
+                        TokenizerError::InvalidSpecialToken { token, id }
+                    );
+                }
+
+        tokenizer.special.insert(token.clone(), id);
+        tokenizer.special_inv.insert(id, token.clone());
+      }
+
+      Ok(tokenizer)
+
+  }
 }
