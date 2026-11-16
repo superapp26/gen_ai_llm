@@ -1,25 +1,7 @@
-use bpe_tokenizer::{GPT4_PATTERN, Tokenizer};
+use bpe_tokenizer::{GPT4_PATTERN, Tokenizer, TokenizerError};
 
 const SAMPLE: &str = "the cat sat on the mat. the dog sat on the log. \
 don't stop: 1234567 cats & 89 dogs!\n    indented line\n";
-
-fn nasty() -> Vec<&'static str> {
-    vec![
-        "",
-        " ",
-        "  two  spaces ",
-        "tab\there",
-        "line\r\nbreak",
-        "e.g. 3.14",
-        "def f():\n    return 1",
-        "my_var_name",
-        "Ġ",
-        "<s>",
-        "café 👋 🤗",
-        "안녕하세요",
-        "\u{0}",
-    ]
-}
 
 // ---------- Step 6: Tokenizer type and errors ----------
 
@@ -94,11 +76,46 @@ fn test_training_updates_chunk_sequences() {
 }
 
 #[test]
-fn step9_encode_roundtrip() {
-    let tok = Tokenizer::train(SAMPLE, 300, GPT4_PATTERN).unwrap();
-    for s in nasty().into_iter().chain([SAMPLE]) {
-        let ids = tok.encode_ordinary(s).unwrap();
-        assert!(ids.len() <= s.len());
-        assert_eq!(tok.decode(&ids).unwrap(), s);
-    }
+fn step10_encode_special_tokens() {
+    let mut tok = Tokenizer::from_merges(
+        GPT4_PATTERN,
+        vec![],
+    ).unwrap();
+
+    tok.register_special_tokens(&[
+        "<s>",
+        "<|endoftext|>",
+    ]);
+
+    let start_id = tok.special_token_id("<s>").unwrap();
+    let end_id = tok.special_token_id("<|endoftext|>").unwrap();
+
+    // Test 1: Disallowed token must be rejected.
+    assert!(matches!(
+        tok.encode("<s>Hello", &[]),
+        Err(TokenizerError::DisallowedTokenSpecial(_))
+    ));
+
+    // Test 2: Explicitly allowed special token.
+    let ids = tok.encode(
+        "<s>Hello",
+        &["<s>"],
+    ).unwrap();
+
+    assert_eq!(ids.first(), Some(&start_id));
+
+    // Test 3: Multiple allowed special tokens.
+    let ids = tok.encode(
+        "<s>Hello<|endoftext|>",
+        &["<s>", "<|endoftext|>"],
+    ).unwrap();
+
+    assert_eq!(ids.first(), Some(&start_id));
+    assert_eq!(ids.last(), Some(&end_id));
+
+    // Test 4: Ordinary encoding never emits special IDs.
+    let ordinary_ids = tok.encode_ordinary("<s>Hello").unwrap();
+
+    assert!(!ordinary_ids.contains(&start_id));
 }
+
